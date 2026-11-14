@@ -1,37 +1,65 @@
+from pathlib import Path
+
+import pandas as pd
+
+ACTIVITY_DIR = Path(__file__).resolve().parents[1]
+DATA_FILE = ACTIVITY_DIR / "data" / "solicitudes_de_credito.csv.gz"
+SUBMISSION_FILE = ACTIVITY_DIR / "submission" / "solicitudes_de_credito.csv"
+
+TEXT_COLUMNS = [
+    "sexo",
+    "tipo_de_emprendimiento",
+    "idea_negocio",
+    "barrio",
+    "línea_credito",
+]
+
+
+def _parse_dates(values):
+    dates = pd.to_datetime(values, format="%d/%m/%Y", errors="coerce")
+    for date_format in ("%Y-%m-%d", "%Y/%m/%d"):
+        dates = dates.fillna(
+            pd.to_datetime(values, format=date_format, errors="coerce")
+        )
+    return dates
+
+
 def pregunta_01():
-    """
-    El archivo `data/solicitudes_de_credito.csv.gz` contiene las solicitudes de
-    un programa de crédito, pero llegó sucio: tiene una columna de índice que
-    no pertenece a los datos, registros duplicados, registros incompletos y
-    valores que representan lo mismo escritos de formas distintas en los
-    campos de texto, las fechas, el estrato y el monto.
+    df = pd.read_csv(DATA_FILE, sep=";", index_col=0)
 
-    Su tarea es limpiarlo y guardar el resultado en
-    `submission/solicitudes_de_credito.csv`, usando punto y coma (`;`) como
-    separador y sin el índice de Pandas.
+    required_cols = [c for c in df.columns if c != "comuna_ciudadano"]
+    df = df.dropna(subset=required_cols).copy()
 
-    El archivo limpio debe cumplir lo siguiente:
+    for col in TEXT_COLUMNS:
+        df[col] = (
+            df[col]
+            .str.lower()
+            .str.replace("-", " ", regex=False)
+            .str.replace("_", " ", regex=False)
+            .str.replace(r"\s+", " ", regex=True)
+            .str.strip()
+        )
 
-    - Contiene solamente las nueve columnas `sexo`, `tipo_de_emprendimiento`,
-      `idea_negocio`, `barrio`, `estrato`, `comuna_ciudadano`,
-      `fecha_de_beneficio`, `monto_del_credito` y `línea_credito`, en ese
-      orden.
-    - Los campos de texto están en minúsculas y sus palabras separadas por
-      espacios.
-    - `estrato` y `monto_del_credito` son números enteros, sin símbolos ni
-      separadores de miles.
-    - Todas las fechas de `fecha_de_beneficio` usan un mismo formato, por
-      ejemplo `AAAA-MM-DD`.
-    - No hay registros incompletos. La única excepción es
-      `comuna_ciudadano`: sus valores faltantes son parte de los datos
-      originales y deben conservarse.
-    - No hay registros duplicados.
+    df["estrato"] = df["estrato"].astype(int)
+    df["comuna_ciudadano"] = pd.to_numeric(
+        df["comuna_ciudadano"], errors="coerce"
+    ).astype("Int64")
 
-    Ejemplo del formato del archivo:
+    df["fecha_de_beneficio"] = _parse_dates(
+        df["fecha_de_beneficio"].astype(str).str.strip()
+    ).dt.strftime("%Y-%m-%d")
 
-        sexo;tipo_de_emprendimiento;idea_negocio;barrio;estrato;...
-        femenino;comercio;almacen de ropa en;los cerros el vergel;2;...
-        ...
-    """
+    df["monto_del_credito"] = (
+        df["monto_del_credito"]
+        .astype(str)
+        .str.replace("$", "", regex=False)
+        .str.replace(",", "", regex=False)
+        .str.strip()
+        .pipe(pd.to_numeric)
+        .astype(int)
+    )
 
-    raise NotImplementedError
+    df = df.drop_duplicates()
+
+    SUBMISSION_FILE.parent.mkdir(parents=True, exist_ok=True)
+    df.to_csv(SUBMISSION_FILE, sep=";", index=False)

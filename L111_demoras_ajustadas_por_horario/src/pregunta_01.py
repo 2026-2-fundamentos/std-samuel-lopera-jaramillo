@@ -1,61 +1,110 @@
+from pathlib import Path
+
 import pandas as pd
+
+ACTIVITY_DIR = Path(__file__).resolve().parents[1]
+DATA_FILE = ACTIVITY_DIR / "data" / "flights_by_carrier_day_hour.csv.gz"
+SUBMISSION_DIR = ACTIVITY_DIR / "submission"
 
 
 def pregunta_01() -> tuple[pd.DataFrame, pd.DataFrame]:
-    """
-    Una autoridad aeronáutica publica cada año un ranking de aerolíneas según
-    su tasa de demora, y algunas aerolíneas se quejan de que es injusto: las
-    demoras se acumulan a lo largo del día, de modo que una aerolínea con
-    muchos vuelos en la tarde y la noche parece peor aunque opere igual de
-    bien que las demás. Su tarea es construir un ranking que tenga en cuenta
-    la mezcla de horarios de cada aerolínea.
+    df = pd.read_csv(DATA_FILE)
 
-    El archivo `data/flights_by_carrier_day_hour.csv.gz` tiene los vuelos
-    nacionales entre 2006 y 2008, agregados por año, mes, día de la semana,
-    hora programada de salida (`scheduled_departure_hour`) y aerolínea
-    (`reporting_airline`). Use las columnas `operated_flights` (vuelos
-    operados) y `delayed_departure_15_flights` (vuelos que salieron con 15
-    minutos o más de demora).
+    # 1. Tasa nacional de demora por hora programada de salida (0 a 23)
+    hourly_delay_rates = (
+        df.groupby("scheduled_departure_hour", as_index=False)
+        .agg(
+            operated_flights=("operated_flights", "sum"),
+            delayed_departure_15_flights=("delayed_departure_15_flights", "sum"),
+        )
+        .sort_values("scheduled_departure_hour")
+        .reset_index(drop=True)
+    )
+    hourly_delay_rates["operated_flights"] = hourly_delay_rates[
+        "operated_flights"
+    ].astype(int)
+    hourly_delay_rates["delayed_departure_15_flights"] = hourly_delay_rates[
+        "delayed_departure_15_flights"
+    ].astype(int)
+    hourly_delay_rates["delay_rate"] = (
+        hourly_delay_rates["delayed_departure_15_flights"]
+        / hourly_delay_rates["operated_flights"]
+    )
 
-    Siga estos pasos:
+    # 2. Demoras observadas vs. esperadas por aerolínea
+    df_with_rate = df.merge(
+        hourly_delay_rates[["scheduled_departure_hour", "delay_rate"]].rename(
+            columns={"delay_rate": "national_delay_rate"}
+        ),
+        on="scheduled_departure_hour",
+        how="left",
+    )
+    df_with_rate["expected_delayed_flights"] = (
+        df_with_rate["operated_flights"] * df_with_rate["national_delay_rate"]
+    )
 
-    1. Calcule la tasa nacional de demora de cada hora programada de salida:
-       vuelos demorados sobre vuelos operados, con todas las aerolíneas
-       juntas.
-    2. Para cada aerolínea, calcule las demoras esperadas: en cada hora,
-       multiplique sus vuelos operados por la tasa nacional de esa hora, y
-       sume sobre todas las horas. Son las demoras que tendría si en cada hora
-       se comportara como el promedio nacional.
-    3. Divida las demoras observadas entre las esperadas. Un valor mayor que 1
-       significa que la aerolínea se demora más de lo que explican sus
-       horarios.
+    carrier_adjusted_delays = df_with_rate.groupby(
+        "reporting_airline", as_index=False
+    ).agg(
+        operated_flights=("operated_flights", "sum"),
+        delayed_departure_15_flights=("delayed_departure_15_flights", "sum"),
+        expected_delayed_flights=("expected_delayed_flights", "sum"),
+    )
 
-    Genere dos archivos en `submission/`, sin el índice de Pandas y con las
-    columnas en el orden indicado:
+    carrier_adjusted_delays = carrier_adjusted_delays[
+        carrier_adjusted_delays["operated_flights"] >= 100_000
+    ].copy()
 
-    1. `hourly_delay_rates.csv`, con una fila por hora, de 0 a 23:
-       `scheduled_departure_hour`, `operated_flights`,
-       `delayed_departure_15_flights` y `delay_rate`.
+    carrier_adjusted_delays["operated_flights"] = carrier_adjusted_delays[
+        "operated_flights"
+    ].astype(int)
+    carrier_adjusted_delays["delayed_departure_15_flights"] = carrier_adjusted_delays[
+        "delayed_departure_15_flights"
+    ].astype(int)
 
-    2. `carrier_adjusted_delays.csv`, con una fila por aerolínea:
-       `reporting_airline`, `operated_flights`,
-       `delayed_departure_15_flights`, `delay_rate` (la tasa sin ajustar),
-       `expected_delayed_flights`, `observed_to_expected_ratio`, `crude_rank`
-       y `adjusted_rank`. Incluya solamente aerolíneas con al menos 100 000
-       vuelos operados. `crude_rank` es la posición según `delay_rate` y
-       `adjusted_rank` la posición según `observed_to_expected_ratio`; en
-       ambos, 1 es la peor aerolínea. Ordene la tabla por `adjusted_rank`.
+    carrier_adjusted_delays["delay_rate"] = (
+        carrier_adjusted_delays["delayed_departure_15_flights"]
+        / carrier_adjusted_delays["operated_flights"]
+    )
+    carrier_adjusted_delays["observed_to_expected_ratio"] = (
+        carrier_adjusted_delays["delayed_departure_15_flights"]
+        / carrier_adjusted_delays["expected_delayed_flights"]
+    )
 
-    Compare los dos rankings: las aerolíneas que cambian de posición son las
-    que el ranking sin ajustar juzga mal por sus horarios.
+    carrier_adjusted_delays["crude_rank"] = (
+        carrier_adjusted_delays["delay_rate"]
+        .rank(ascending=False, method="min")
+        .astype(int)
+    )
+    carrier_adjusted_delays["adjusted_rank"] = (
+        carrier_adjusted_delays["observed_to_expected_ratio"]
+        .rank(ascending=False, method="min")
+        .astype(int)
+    )
 
-    La función también debe retornar las dos tablas, en el mismo orden.
+    carrier_adjusted_delays = (
+        carrier_adjusted_delays.sort_values("adjusted_rank")[
+            [
+                "reporting_airline",
+                "operated_flights",
+                "delayed_departure_15_flights",
+                "delay_rate",
+                "expected_delayed_flights",
+                "observed_to_expected_ratio",
+                "crude_rank",
+                "adjusted_rank",
+            ]
+        ]
+        .reset_index(drop=True)
+    )
 
-    Ejemplo del formato de `carrier_adjusted_delays.csv`:
+    # Guardar resultados
+    SUBMISSION_DIR.mkdir(parents=True, exist_ok=True)
+    hourly_delay_rates.to_csv(
+        SUBMISSION_DIR / "hourly_delay_rates.csv", index=False
+    )
+    carrier_adjusted_delays.to_csv(
+        SUBMISSION_DIR / "carrier_adjusted_delays.csv", index=False
+    )
 
-        reporting_airline,operated_flights,...,crude_rank,adjusted_rank
-        EV,819223,...,1,1
-        ...
-    """
-
-    raise NotImplementedError
+    return hourly_delay_rates, carrier_adjusted_delays

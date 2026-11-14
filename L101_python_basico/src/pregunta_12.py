@@ -1,12 +1,18 @@
+import gzip
+from pathlib import Path
+
+DATA_FILE = Path(__file__).resolve().parents[1] / "data" / "data.csv.gz"
+
+
 def pregunta_12():
-    """
-    Para cada letra de la primera columna (`letter`), sume todos los valores
-    numéricos de los pares `clave:valor` de la quinta columna (`metrics`).
-    Retorne un diccionario `{letra: suma}` con las letras en orden alfabético.
+    totals = {}
+    with gzip.open(DATA_FILE, "rt", encoding="utf-8") as file:
+        for line in file:
+            cols = line.strip().split("\t")
+            letter = cols[0]
+            metrics_sum = sum(
+                int(item.split(":")[1]) for item in cols[4].split(",")
+            )
+            totals[letter] = totals.get(letter, 0) + metrics_sum
 
-    Ejemplo del formato de la respuesta:
-
-        {"A": 177, "B": 187, "C": 114, ...}
-    """
-
-    raise NotImplementedError
+    return dict(sorted(totals.items()))
